@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web3 Oylama Sistemi</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🗳️ dApp Oylama Sistemi</h1>
+            <button id="connectButton" class="btn-connect">Cüzdanı Bağla</button>
+            <p id="walletAddress" class="wallet-text"></p>
+        </header>
+
+        <main>
+            <section class="card-section">
+                <h2>Adaylar ve Oy Sayıları</h2>
+                <div id="candidatesList" class="candidates-grid">
+                    <p class="loading">Veriler yükleniyor veya cüzdan bağlı değil...</p>
+                </div>
+            </section>
+
+            <section id="adminSection" class="card-section hidden">
+                <h2>👑 Yönetici Paneli</h2>
+                <div class="form-group">
+                    <input type="text" id="candidateNameInput" placeholder="Yeni aday ismi girin">
+                    <button id="addCandidateButton" class="btn-primary">Aday Ekle</button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        // Kontrat Bilgileri
+        const contractAddress = "0x53189202bf37F52Dc0fb8Ee035FE2F97A7cA4fa3";
+        const contractABI = [
+            {
+                "inputs": [{ "internalType": "string", "name": "_name", "type": "string" }],
+                "name": "addCandidate",
+                "outputs": [],
+                "stateMutability": "nonpayable",
+                "type": "function"
+            },
+            {
+                "inputs": [],
+                "stateMutability": "nonpayable",
+                "type": "constructor"
+            },
+            {
+                "inputs": [{ "internalType": "uint256", "name": "_candidateId", "type": "uint256" }],
+                "name": "vote",
+                "outputs": [],
+                "stateMutability": "nonpayable",
+                "type": "function"
+            },
+            {
+                "inputs": [],
+                "name": "getCandidateCount",
+                "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [],
+                "name": "getCandidates",
+                "outputs": [
+                    {
+                        "components": [
+                            { "internalType": "uint256", "name": "id", "type": "uint256" },
+                            { "internalType": "string", "name": "name", "type": "string" },
+                            { "internalType": "uint256", "name": "voteCount", "type": "uint256" }
+                        ],
+                        "internalType": "struct VotingSystem.Candidate[]",
+                        "name": "",
+                        "type": "tuple[]"
+                    }
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [{ "internalType": "address", "name": "", "type": "address" }],
+                "name": "hasVoted",
+                "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [],
+                "name": "owner",
+                "outputs": [{ "internalType": "address", "name": "", "type": "address" }],
+                "stateMutability": "view",
+                "type": "function"
+            }
+        ];
+
+        let provider;
+        let signer;
+        let contract;
+        let userAddress;
+
+        // DOM Elementleri
+        const connectButton = document.getElementById("connectButton");
+        const walletAddressText = document.getElementById("walletAddress");
+        const candidatesListDiv = document.getElementById("candidatesList");
+        const adminSection = document.getElementById("adminSection");
+        const candidateNameInput = document.getElementById("candidateNameInput");
+        const addCandidateButton = document.getElementById("addCandidateButton");
+
+        // Sayfa yüklendiğinde otomatik kontrol
+        window.addEventListener('load', async () => {
+            if (typeof window.ethereum !== 'undefined') {
+                const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+                if (accounts.length > 0) {
+                    initDApp();
+                }
+            } else {
+                candidatesListDiv.innerHTML = "<p class='loading'>Lütfen MetaMask eklentisini kurun!</p>";
+            }
+        });
+
+        connectButton.addEventListener('click', initDApp);
+
+        async function initDApp() {
+            try {
+                // Ethers v6 tarayıcı sağlayıcısı
+                provider = new ethers.BrowserProvider(window.ethereum);
+                
+                // Cüzdan erişim izni ve signer alma
+                signer = await provider.getSigner();
+                userAddress = await signer.getAddress();
+                
+                // Kontrat bağlantısı
+                contract = new ethers.Contract(contractAddress, contractABI, signer);
+
+                // Arayüz güncelleme
+                walletAddressText.innerText = `Bağlı Hesap: ${userAddress}`;
+                connectButton.innerText = "Bağlandı";
+                connectButton.disabled = true;
+
+                // Kontrat verilerini yükleme
+                await checkAdminStatus();
+                await loadCandidates();
+
+            } catch (error) {
+                console.error("Cüzdan bağlantı hatası:", error);
+                alert("Cüzdan bağlantısı başarısız oldu.");
+            }
+        }
+
+        // Admin (Owner) kontrolü
+        async function checkAdminStatus() {
+            try {
+                const contractOwner = await contract.owner();
+                if (userAddress.toLowerCase() === contractOwner.toLowerCase()) {
+                    adminSection.classList.remove("hidden");
+                }
+            } catch (error) {
+                console.error("Admin durumu kontrol edilirken hata oluştu:", error);
+            }
+        }
+
+        // Adayları Listeleme
+        async function loadCandidates() {
+            try {
+                candidatesListDiv.innerHTML = "<p class='loading'>Adaylar yükleniyor...</p>";
+                const candidates = await contract.getCandidates();
+                
+                candidatesListDiv.innerHTML = ""; 
+
+                if (candidates.length === 0) {
+                    candidatesListDiv.innerHTML = "<p class='loading'>Henüz aday eklenmemiş.</p>";
+                    return;
+                }
+
+                candidates.forEach(candidate => {
+                    const id = candidate.id.toString();
+                    const name = candidate.name;
+                    const voteCount = candidate.voteCount.toString();
+
+                    const card = document.createElement("div");
+                    card.className = "candidate-card";
+                    card.innerHTML = `
+                        <div class="candidate-info">
+                            <h3>${name}</h3>
+                            <span>Toplam Oy: <strong>${voteCount}</strong></span>
+                        </div>
+                        <button class="btn-vote" onclick="vote(${id})">Oy Ver</button>
+                    `;
+                    candidatesListDiv.appendChild(card);
+                });
+
+            } catch (error) {
+                console.error("Adaylar yüklenirken hata:", error);
+                candidatesListDiv.innerHTML = "<p class='loading'>Veriler çekilemedi.</p>";
+            }
+        }
+
+        // Oy Verme İşlemi
+        async function vote(candidateId) {
+            try {
+                const hasVoted = await contract.hasVoted(userAddress);
+                if (hasVoted) {
+                    alert("Bu adresten zaten oy kullanılmış!");
+                    return;
+                }
+
+                const tx = await contract.vote(candidateId);
+                candidatesListDiv.innerHTML = "<p class='loading'>İşlem blokzincire gönderildi. Onay bekleniyor...</p>";
+                
+                await tx.wait(); 
+                alert("Oyunuz başarıyla kaydedildi!");
+                await loadCandidates(); 
+
+            } catch (error) {
+                console.error("Oy verme hatası:", error);
+                alert("İşlem iptal edildi veya bir hata oluştu.");
+                await loadCandidates();
+            }
+        }
+
+        // Yeni Aday Ekleme (Sadece Admin)
+        addCandidateButton.addEventListener('click', async () => {
+            const name = candidateNameInput.value.trim();
+            if (!name) {
+                alert("Lütfen geçerli bir aday ismi girin.");
+                return;
+            }
+
+            try {
+                const tx = await contract.addCandidate(name);
+                candidateNameInput.value = "";
+                alert("Aday ekleme işlemi bloğa gönderildi. Lütfen bekleyin...");
+                
+                await tx.wait();
+                alert("Yeni aday başarıyla eklendi!");
+                await loadCandidates();
+
+            } catch (error) {
+                console.error("Aday ekleme hatası:", error);
+                alert("Aday eklenirken bir hata oluştu.");
+            }
+        });
+    </script>
+</body>
+</html>
